@@ -25,13 +25,14 @@ that.
 
 ## Features
 
-- **Live sensors** — CPU and GPU temperature, both fan speeds, GPU draw and
-  utilisation, battery charge and charge rate, refreshed every 2 seconds while
-  the panel is open. The same readings appear in the bar icon's tooltip, so
-  "how hot is it right now" needs no click.
+- **Live sensors** — CPU temperature, both fan speeds, battery charge and charge
+  rate, plus GPU telemetry when the NVIDIA driver exposes it through sysfs.
+  The plugin never polls `nvidia-smi`, because polling it can wake a suspended
+  dGPU. The same available readings appear in the bar icon's tooltip.
 - **Main** — performance mode (Quiet/Balanced/Performance, tinted by mode),
-  GPU mode (Eco/Standard/Ultimate), screen refresh rate and panel overdrive,
-  battery charge limit.
+  a Linux-aware GPU selector (Intel only/Hybrid/dGPU direct), actual display
+  ownership and dGPU runtime/process state, screen refresh rate and panel
+  overdrive, battery charge limit.
 - **RGB** — keyboard lighting, filtered to the aura effects your laptop
   actually reports (`asusctl info --show-supported`), not a fixed list of
   twelve, plus brightness and the awake/boot/sleep power states.
@@ -59,6 +60,41 @@ feature set where Linux tooling allows it. What is deliberately absent:
 | AutoTDP, FPS limiter, overlay | Windows-only mechanisms |
 | Per-key / per-zone RGB | `asusctl` exposes zones only on some models; single-colour effects only for now |
 | Automatic AC/battery profile switching | `asusctl` applies its own AC/battery profiles; not duplicated here |
+
+### GPU selector and safety
+
+The selector follows the mappings in upstream
+[`asusctl` 6.3.8](https://gitlab.com/asus-linux/asusctl/-/blob/6.3.8/rog-platform/src/platform.rs),
+not the apparent truthiness of the firmware value:
+
+| UI mode | `gpu_mux_mode` | `dgpu_disable` | Linux behavior after shutdown/reboot |
+|---|---:|---:|---|
+| Intel only | 1 | 1 | Intel owns the panel; NVIDIA is disabled |
+| Hybrid | 1 | 0 | Intel owns the panel; NVIDIA is available on demand |
+| dGPU direct | 0 | 0 | NVIDIA owns the internal panel |
+
+`asusd` queues these GPU attributes in memory and `asus-shutdown` applies them
+during a normal shutdown. The UI therefore keeps three different facts
+separate: current firmware values, queued values, and observed Linux state. It
+finds the connected internal panel's DRM driver, reads the NVIDIA PCI runtime
+status, and uses `fuser` to list visible processes holding NVIDIA or NVIDIA DRM
+device nodes. It can report disabled, runtime suspended, awake-idle, or busy
+without running `nvidia-smi`.
+
+Moving between Hybrid and Intel only changes `dgpu_disable`; the MUX is left at
+1. Selecting Intel only runs a fresh process check and refuses the first click
+when NVIDIA is busy (or process detection is unavailable). Close the listed
+programs and try again, or use the explicit **Disable anyway** confirmation.
+
+Changes are only scheduled: the plugin does not shut down or restart the
+laptop. **Keep current mode** replaces pending values with the currently active
+firmware mode; because `asusd` has no queue-clear API, no-op values may remain
+queued until shutdown. There is deliberately no automatic "restore on next
+boot" action: these are persistent ASUS firmware attributes, so their effect
+can carry into Windows even though the plugin never changes Windows files.
+
+GPU selection does not touch monitor configuration or refresh rate. A panel
+running at 240 Hz remains at 240 Hz unless the separate Screen control is used.
 
 ### Screen refresh rate
 
@@ -119,8 +155,9 @@ and enable it via the Omarchy plugin menu.
 omarchy plugin remove io.github.moneytosms.asus
 ```
 
-Nothing is written outside the plugin folder and the plugin's own settings
-block in `~/.config/omarchy/shell.json`, which Omarchy drops with the plugin.
+Removal deletes the plugin folder and its settings block in
+`~/.config/omarchy/shell.json`. It does not revert settings previously sent to
+`asusctl`; persistent ASUS firmware values, including GPU mode, remain as set.
 
 ## Configuration
 
@@ -150,6 +187,12 @@ systemctl status asusd
 # Check what your model supports
 asusctl info --show-supported
 asusctl armoury list
+
+# Compare live and queued GPU firmware values
+busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/gpu_mux_mode xyz.ljones.AsusArmoury CurrentValue
+busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/gpu_mux_mode xyz.ljones.AsusArmoury QueuedGpuValue
+busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury CurrentValue
+busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury QueuedGpuValue
 ```
 
 ## License

@@ -1,9 +1,9 @@
 // Regression checks for Model.js — run with `node test-model.js`.
 //
 // Model.js is plain ES5 loaded by QML, so it can be evaluated directly here.
-// The fixtures are verbatim output from asusctl 6.3.8 / hyprctl / the sensor
-// script on a TUF Gaming F15 (FX507VV); every parser in Model.js reads real
-// tool output, so the only useful test is against real tool output.
+// The fixtures are real asusctl 6.3.8 / hyprctl / status-probe output from a
+// TUF Gaming F15 (FX507VV) and ROG Zephyrus G16 (GU605CW); every parser in
+// Model.js reads real tool output, so the useful tests use real formats.
 
 const fs = require("fs")
 const vm = require("vm")
@@ -69,15 +69,15 @@ fan_gpu=3100
 bat_pct=99
 bat_status=Charging
 bat_power=8627000
-gpu_temp=51
-gpu_power=6.66
+gpu_temp_milli=51000
+gpu_power_uw=6660000
 gpu_util=15
 `
 const s = M.parseSensors(SENSORS)
 assert.equal(s.cpuTemp, 63)      // millidegrees -> C
 assert.equal(s.fanCpu, 3000)
 assert.equal(s.gpuTemp, 51)
-assert.equal(s.gpuPower, 7)
+assert.ok(Math.abs(s.gpuPower - 6.66) < 0.001)
 assert.equal(s.batPct, 99)
 assert.equal(s.batStatus, "Charging")
 assert.ok(Math.abs(s.batPower - 8.627) < 0.001)  // microwatts -> W
@@ -129,9 +129,79 @@ assert.deepEqual(M.parseHyprmoncfgStatus(""), { managed: false, profile: "" })
 assert.deepEqual(M.parseHyprmoncfgStatus("command not found"), { managed: false, profile: "" })
 
 // ---------------------------------------------------------------- gpu mode
-assert.equal(M.gpuModeId(0, 0), "standard")
-assert.equal(M.gpuModeId(0, 1), "eco")
-assert.equal(M.gpuModeId(1, 0), "ultimate")
+// asus-linux's authoritative mapping is mux 0 = Ultimate and mux 1 =
+// Optimus/Hybrid. Integrated/Intel-only adds dgpu_disable=1 without moving
+// the MUX away from Intel.
+assert.equal(M.gpuModeId(1, 0), "standard")
+assert.equal(M.gpuModeId(1, 1), "eco")
+assert.equal(M.gpuModeId(0, 0), "ultimate")
+assert.equal(M.gpuModeDef("eco").mux, 1)
+assert.equal(M.gpuModeDef("standard").mux, 1)
+assert.equal(M.gpuModeDef("ultimate").mux, 0)
+
+// Hybrid <-> Intel-only changes only dgpu_disable. A MUX write is introduced
+// only when entering or leaving dGPU-direct, and writes are serialized in the
+// same dgpu-then-mux order as upstream rog-control-center.
+assert.deepEqual(M.gpuModeCommands(1, 0, "eco", true, true), [
+    ["asusctl", "armoury", "set", "dgpu_disable", "1"]
+])
+assert.deepEqual(M.gpuModeCommands(1, 1, "standard", true, true), [
+    ["asusctl", "armoury", "set", "dgpu_disable", "0"]
+])
+assert.deepEqual(M.gpuModeCommands(0, 0, "eco", true, true), [
+    ["asusctl", "armoury", "set", "dgpu_disable", "1"],
+    ["asusctl", "armoury", "set", "gpu_mux_mode", "1"]
+])
+assert.deepEqual(M.gpuModeCommands(1, 0, "ultimate", true, true), [
+    ["asusctl", "armoury", "set", "gpu_mux_mode", "0"]
+])
+assert.deepEqual(M.gpuModeCommands(0, 0, "standard", true, true), [
+    ["asusctl", "armoury", "set", "gpu_mux_mode", "1"]
+])
+assert.deepEqual(M.gpuModeCommands(-1, 0, "eco", false, true), [
+    ["asusctl", "armoury", "set", "dgpu_disable", "1"]
+])
+assert.deepEqual(M.gpuModeCommands(1, 0, "ultimate", false, true), [])
+assert.deepEqual(M.gpuModeCommands(0, 0, "eco", true, false), [])
+assert.equal(M.gpuModeAvailable("eco", true, false), false)
+assert.equal(M.gpuModeAvailable("eco", false, true), true)
+assert.equal(M.gpuModeAvailable("ultimate", true, false), true)
+assert.equal(M.gpuModeAvailable("ultimate", false, true), false)
+assert.equal(M.effectiveGpuValue(1, -1), 1)
+assert.equal(M.effectiveGpuValue(1, 0), 0)
+
+const GPU_STATUS = `display_connector=eDP-2
+display_driver=i915
+dgpu_present=1
+dgpu_runtime=active
+gpu_mux_mode_current=1
+gpu_mux_mode_queued=0
+dgpu_disable_current=0
+dgpu_disable_queued=-1
+users_known=1
+gpu_user=1403|Hyprland
+gpu_user=3999|ChatGPT
+`
+const gs = M.parseGpuStatus(GPU_STATUS)
+assert.equal(gs.displayConnector, "eDP-2")
+assert.equal(M.displayOwnerLabel(gs.displayDriver), "Intel (i915)")
+assert.equal(gs.muxCurrent, 1)
+assert.equal(gs.muxQueued, 0)
+assert.equal(gs.dgpuCurrent, 0)
+assert.equal(gs.users.length, 2)
+assert.equal(M.dgpuStateLabel(gs, 0), "busy — 2 visible processes")
+assert.equal(M.gpuUsersText(gs.users), "Hyprland (1403), ChatGPT (3999)")
+assert.equal(M.gpuDisableNeedsConfirmation("eco", 0, gs), true)
+assert.equal(M.gpuDisableNeedsConfirmation("standard", 0, gs), false)
+assert.equal(M.gpuDisableNeedsConfirmation("eco", 1, gs), false)
+assert.equal(M.gpuDisableNeedsConfirmation("eco", 0, { usersKnown: false, users: [] }), true)
+assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "suspended" }, 0), "runtime suspended")
+assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active" }, 0), "awake-idle")
+assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active" }, 1), "disabled by firmware")
+
+// Opening the panel must not wake a suspended NVIDIA GPU.
+assert.equal(M.sensorCommand().join(" ").indexOf("nvidia-smi"), -1)
+assert.equal(M.gpuStatusCommand().join(" ").indexOf("nvidia-smi"), -1)
 
 // ---------------------------------------------------------------- features
 // asusctl 6.x names the charge limit ChargeControlEndThreshold; matching only
