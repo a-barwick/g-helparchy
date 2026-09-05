@@ -276,6 +276,8 @@ Panel {
     // actually exposes (no dGPU / no panel overdrive on some models).
     property var armourySupported: ({ panelOverdrive: false, gpuMux: false, dgpuDisable: false, pptPl1: false, pptPl2: false, nvDynBoost: false, nvTempTarget: false })
     property var armouryDefaults: ({})
+    property var armouryActionQueue: []
+    property string armouryActionError: ""
     property bool panelOverdrive: false
     property int gpuMuxValue: -1
     property int dgpuDisableValue: -1
@@ -303,10 +305,10 @@ Panel {
     // Current firmware state and queued shutdown intent are separate. asusd
     // deliberately keeps queued values out of CurrentValue, so presenting one
     // as the other would make a pending MUX change look as though it were live.
-    readonly property string currentGpuMode: Model.gpuModeId(gpuMuxValue, dgpuDisableValue)
+    readonly property string currentGpuMode: Model.gpuModeId(gpuMuxValue, dgpuDisableValue, armourySupported.gpuMux, armourySupported.dgpuDisable)
     readonly property int effectiveGpuMux: Model.effectiveGpuValue(gpuMuxValue, gpuMuxQueued)
     readonly property int effectiveDgpuDisable: Model.effectiveGpuValue(dgpuDisableValue, dgpuDisableQueued)
-    readonly property string gpuMode: Model.gpuModeId(effectiveGpuMux, effectiveDgpuDisable)
+    readonly property string gpuMode: Model.gpuModeId(effectiveGpuMux, effectiveDgpuDisable, armourySupported.gpuMux, armourySupported.dgpuDisable)
     readonly property bool gpuHasPending: gpuMuxQueued >= 0 || dgpuDisableQueued >= 0
     readonly property bool hasGpuMode: armourySupported.gpuMux || armourySupported.dgpuDisable
 
@@ -374,7 +376,26 @@ Panel {
     }
     function selectFanProfile(p) { if (!p || p === fanProfile) return; fanEditProfile = p; if (!fanModProc.running) fanModProc.running = true }
 
-    function setArmouryAttr(a, v) { if (actionProc.running || gpuActionProc.running) return; actionProc.command = ["asusctl", "armoury", "set", a, String(v)]; actionProc.running = true }
+    function setArmouryAttr(a, v) {
+        armouryActionError = ""
+        armouryActionQueue = armouryActionQueue.concat([["asusctl", "armoury", "set", a, String(v)]])
+        runNextArmouryAction()
+    }
+    function runNextArmouryAction() {
+        if (armouryActionProc.running || gpuActionProc.running || gpuActionQueue.length > 0) return
+        if (armouryActionQueue.length === 0) {
+            if (!armouryProc.running) armouryProc.running = true
+            return
+        }
+        var queue = armouryActionQueue.slice(0)
+        armouryActionProc.command = queue.shift()
+        armouryActionQueue = queue
+        armouryActionProc.running = true
+    }
+    function finishArmouryAction(ec) {
+        if (ec !== 0) armouryActionError = "Could not apply a firmware setting (asusctl exit " + ec + ")."
+        Qt.callLater(root.runNextArmouryAction)
+    }
     function togglePanelOverdrive() { panelOverdrive = !panelOverdrive; setArmouryAttr("panel_overdrive", panelOverdrive ? 1 : 0) }
     function setPptPl1(v) { pptPl1 = Math.round(v); setArmouryAttr("ppt_pl1_spl", pptPl1) }
     function setPptPl2(v) { pptPl2 = Math.round(v); setArmouryAttr("ppt_pl2_sppt", pptPl2) }
@@ -391,10 +412,10 @@ Panel {
     }
 
     // GPU writes are serialized because a mode can require two attributes.
-    // Intel-only is preflighted against real device users immediately before
+    // Integrated is preflighted against real device users immediately before
     // queueing; a busy or uninspectable dGPU requires a second explicit click.
     function requestGpuMode(id) {
-        if (!id || gpuActionProc.running || gpuActionQueue.length > 0 || actionProc.running) return
+        if (!id || gpuActionProc.running || gpuActionQueue.length > 0 || armouryActionProc.running || armouryActionQueue.length > 0 || actionProc.running) return
         gpuActionError = ""
         gpuConfirmMode = ""
         if (id === "eco" && effectiveDgpuDisable !== 1) {
@@ -423,7 +444,7 @@ Panel {
     }
 
     function queueGpuMode(id) {
-        if (gpuActionProc.running || gpuActionQueue.length > 0 || actionProc.running) return
+        if (gpuActionProc.running || gpuActionQueue.length > 0 || armouryActionProc.running || armouryActionQueue.length > 0 || actionProc.running) return
         var commands = Model.gpuModeCommands(effectiveGpuMux, effectiveDgpuDisable, id,
                                              armourySupported.gpuMux, armourySupported.dgpuDisable)
         if (commands.length === 0) return
@@ -436,6 +457,7 @@ Panel {
         if (gpuActionProc.running) return
         if (gpuActionQueue.length === 0) {
             gpuActionTarget = ""
+            runNextArmouryAction()
             if (!gpuStatusProc.running) gpuStatusProc.running = true
             if (!armouryProc.running) armouryProc.running = true
             return
@@ -621,7 +643,7 @@ Panel {
                                     width: gRow.cw
                                     // Ultimate needs the mux; hiding it outright would
                                     // shuffle the row, so it is disabled instead.
-                                    enabled: !gpuActionProc.running && !actionProc.running && root.gpuActionQueue.length === 0 && root.pendingGpuRequest === "" &&
+                                    enabled: !gpuActionProc.running && !armouryActionProc.running && root.armouryActionQueue.length === 0 && !actionProc.running && root.gpuActionQueue.length === 0 && root.pendingGpuRequest === "" &&
                                              Model.gpuModeAvailable(modelData.id, root.armourySupported.gpuMux, root.armourySupported.dgpuDisable)
                                     opacity: enabled ? 1 : 0.4
                                     iconText: modelData.icon; iconSize: Style.font.title
@@ -671,7 +693,7 @@ Panel {
                                 spacing: Style.space(5)
                                 Text { width: parent.width; text: "Scheduled: " + Model.gpuModeDef(root.gpuMode).name + " on the next normal shutdown/reboot."; wrapMode: Text.WordWrap; color: "#ffb347"; font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
                                 Text { width: parent.width; text: "This ASUS firmware state can carry into Windows; no Windows files are changed. The panel never shuts down or restarts the laptop."; wrapMode: Text.WordWrap; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption }
-                                Button { width: parent.width; text: "Keep current " + Model.gpuModeDef(root.currentGpuMode).name; tooltipText: "Replace the queued GPU values with the current firmware mode. A no-op may still remain queued until shutdown."; fontSize: Style.font.bodySmall; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; onClicked: root.keepCurrentGpuMode() }
+                                Button { width: parent.width; enabled: root.currentGpuMode !== "unknown"; text: "Keep current " + Model.gpuModeDef(root.currentGpuMode).name; tooltipText: "Replace the queued GPU values with the current firmware mode. A no-op may still remain queued until shutdown."; fontSize: Style.font.bodySmall; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; onClicked: root.keepCurrentGpuMode() }
                             }
                         }
 
@@ -687,7 +709,7 @@ Panel {
                                 anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
                                 anchors.margins: Style.space(6)
                                 spacing: Style.space(5)
-                                Text { width: parent.width; text: root.gpuStatus.usersKnown ? "NVIDIA is busy. Close these processes first, or explicitly continue:\n" + Model.gpuUsersText(root.gpuStatus.users) : "GPU process detection is unavailable because fuser is missing. Explicit confirmation is required."; wrapMode: Text.WrapAnywhere; color: "#ff7770"; font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                                Text { width: parent.width; text: root.gpuStatus.usersKnown ? "NVIDIA is busy. Close these processes first, or explicitly continue:\n" + Model.gpuUsersText(root.gpuStatus.users) : "GPU process detection is unavailable. Explicit confirmation is required."; wrapMode: Text.WrapAnywhere; color: "#ff7770"; font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
                                 Text { width: parent.width; text: "Disabling is only queued now, but these processes may block the firmware change at shutdown."; wrapMode: Text.WordWrap; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption }
                                 Row {
                                     width: parent.width; spacing: Style.space(4)
@@ -980,8 +1002,9 @@ Panel {
                 Column { visible: root.tabKey === "advanced"; width: parent.width; spacing: Style.space(8)
                     Row { width: parent.width
                         Text { width: parent.width - defaultsBtn.width - Style.space(8); text: "Firmware power limits. Only the controls this laptop actually reports are shown."; wrapMode: Text.WordWrap; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; anchors.verticalCenter: parent.verticalCenter }
-                        Button { id: defaultsBtn; text: "Defaults"; tooltipText: "Put every power limit below back to the value\nthe firmware reports as its default."; fontSize: Style.font.caption; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; anchors.verticalCenter: parent.verticalCenter; onClicked: root.restorePowerDefaults() }
+                        Button { id: defaultsBtn; text: "Defaults"; tooltipText: root.armouryActionError || "Put every power limit below back to the value\nthe firmware reports as its default."; fontSize: Style.font.caption; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; anchors.verticalCenter: parent.verticalCenter; onClicked: root.restorePowerDefaults() }
                     }
+                    Text { visible: root.armouryActionError !== ""; width: parent.width; text: root.armouryActionError; wrapMode: Text.WordWrap; color: "#ff7770"; font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption }
                     Column { visible: root.armourySupported.pptPl1 || root.armourySupported.pptPl2; width: parent.width; spacing: Style.space(4)
                         Text { text: "CPU Power"; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true }
                         Row { visible: root.armourySupported.pptPl1; width: parent.width; spacing: Style.space(4)
@@ -1137,12 +1160,14 @@ Panel {
                 root.gpuActionError = "Could not schedule the GPU change (asusctl exit " + ec + ")."
                 root.gpuActionQueue = []
                 root.gpuActionTarget = ""
+                root.runNextArmouryAction()
                 if (!gpuStatusProc.running) gpuStatusProc.running = true
                 return
             }
             Qt.callLater(root.runNextGpuAction)
         }
     }
+    Process { id: armouryActionProc; onExited: function(ec) { root.finishArmouryAction(ec) } }
     Process { id: actionProc; onExited: function() { if (!profileProc.running) profileProc.running = true; if (!batteryProc.running) batteryProc.running = true; if (!ledProc.running) ledProc.running = true; if (!armouryProc.running) armouryProc.running = true; if (!monitorProc.running) monitorProc.running = true; if (!fanDetailProc.running) fanDetailProc.running = true } }
     Timer { interval: root.refreshInterval; running: root.opened && root.asusctlAvailable; repeat: true; onTriggered: root.refresh() }
 

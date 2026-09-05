@@ -504,12 +504,12 @@ function fmtWatts(w) { return w < 0 ? "—" : (Math.round(w * 10) / 10) + " W" }
 // firmware intent, not which GPU owns a connector or whether NVIDIA is awake,
 // so the UI reports those independently from Linux sysfs below.
 var gpuModes = [
-    { id: "eco",      name: "Intel only", icon: "\u{F06C0}", desc: "Intel display, NVIDIA disabled", mux: 1, dgpuDisable: 1,
-      tip: "Queues dgpu_disable=1. Keeps the display MUX on Intel and disables NVIDIA after a normal shutdown/reboot." },
-    { id: "standard", name: "Hybrid",     icon: "\u{F035B}", desc: "Intel display, NVIDIA available on demand", mux: 1, dgpuDisable: 0,
-      tip: "Queues dgpu_disable=0. Intel owns the panel; NVIDIA remains available for games, CUDA, and render offload." },
-    { id: "ultimate", name: "dGPU direct", icon: "\u{F04C5}", desc: "NVIDIA owns the internal display", mux: 0, dgpuDisable: 0,
-      tip: "Queues gpu_mux_mode=0 and enables NVIDIA. The internal panel moves to the dGPU after a normal shutdown/reboot." }
+    { id: "eco",      name: "Integrated", icon: "\u{F06C0}", desc: "Integrated display, discrete GPU disabled", mux: 1, dgpuDisable: 1,
+      tip: "Uses integrated graphics and disables the discrete GPU after a normal shutdown/reboot." },
+    { id: "standard", name: "Hybrid",     icon: "\u{F035B}", desc: "Integrated display, discrete GPU available on demand", mux: 1, dgpuDisable: 0,
+      tip: "The integrated GPU drives the panel; the discrete GPU remains available for render offload." },
+    { id: "ultimate", name: "dGPU direct", icon: "\u{F04C5}", desc: "Discrete GPU owns the internal display", mux: 0, dgpuDisable: 0,
+      tip: "The discrete GPU drives the internal panel after a normal shutdown/reboot." }
 ]
 
 // Tooltip copy for the firmware attributes on the Advanced tab. Keyed by the
@@ -522,18 +522,24 @@ var armouryTips = {
     panel_overdrive: "Speeds up pixel transitions to cut ghosting at high refresh rates.\nCan cause slight overshoot artefacts on some panels."
 }
 
-function gpuModeId(mux, dgpuDisabled) {
-    if (Number(mux) === 0) return "ultimate"
-    return Number(dgpuDisabled) === 1 ? "eco" : "standard"
+function gpuModeId(mux, dgpuDisabled, supportsMux, supportsDgpu) {
+    if (supportsMux === false && supportsDgpu === false) return "unknown"
+    mux = parseGpuInteger(mux)
+    dgpuDisabled = parseGpuInteger(dgpuDisabled)
+    if (mux === 0) return "ultimate"
+    if (mux !== 1 && supportsMux !== false) return "unknown"
+    if (dgpuDisabled === 1) return "eco"
+    if (dgpuDisabled === 0 || supportsDgpu === false) return "standard"
+    return "unknown"
 }
 
 function gpuModeDef(id) {
     for (var i = 0; i < gpuModes.length; i++) if (gpuModes[i].id === id) return gpuModes[i]
-    return gpuModes[1]
+    return { id: "unknown", name: "Unknown", desc: "GPU mode is unavailable" }
 }
 
 // Return the minimal ordered set of writes needed for a target. In the common
-// Hybrid <-> Intel-only transition gpu_mux_mode is already 1, so only
+// Hybrid <-> Integrated transition gpu_mux_mode is already 1, so only
 // dgpu_disable is touched. Values may be queued values rather than current
 // values, which lets a second click safely replace a pending choice.
 function gpuModeCommands(currentMux, currentDgpu, id, supportsMux, supportsDgpu) {
@@ -550,7 +556,7 @@ function gpuModeCommands(currentMux, currentDgpu, id, supportsMux, supportsDgpu)
 function gpuModeAvailable(id, supportsMux, supportsDgpu) {
     if (id === "eco") return !!supportsDgpu
     if (id === "ultimate") return !!supportsMux
-    return !!supportsMux || !!supportsDgpu
+    return id === "standard" && (!!supportsMux || !!supportsDgpu)
 }
 
 function effectiveGpuValue(currentValue, queuedValue) {
@@ -587,10 +593,17 @@ var gpuStatusScript =
     'echo "${a}_current=${v##* }"; ' +
     'v=$(busctl get-property xyz.ljones.Asusd "$path" xyz.ljones.AsusArmoury QueuedGpuValue 2>/dev/null); ' +
     'echo "${a}_queued=${v##* }"; done; ' +
-    'if command -v fuser >/dev/null 2>&1; then echo "users_known=1"; ' +
-    'for pid in $(fuser $gpu_nodes 2>/dev/null | tr " " "\\n" | sed "/^$/d" | sort -nu); do ' +
-    'comm=$(cat "/proc/$pid/comm" 2>/dev/null | tr "|=" "__"); [ -n "$comm" ] && echo "gpu_user=$pid|$comm"; done; ' +
-    'else echo "users_known=0"; fi'
+    'users_known=0; ' +
+    'if [ -n "$gpu_nodes" ] && command -v fuser >/dev/null 2>&1; then ' +
+    'err=$(mktemp) || exit 1; trap \'rm -f "$err"\' EXIT; ' +
+    'pids=$(fuser $gpu_nodes 2>"$err"); rc=$?; ' +
+    // fuser writes file labels to stderr on success. With no matches it
+    // returns 1 and no output; diagnostics on that path mean detection failed.
+    'if [ "$rc" = 0 ] || { [ "$rc" = 1 ] && [ ! -s "$err" ]; }; then users_known=1; fi; ' +
+    'for pid in $(printf "%s" "$pids" | tr " " "\\n" | sed "/^$/d" | sort -nu); do ' +
+    'comm=$(cat "/proc/$pid/comm" 2>/dev/null | tr "|=" "__"); ' +
+    '[ -n "$comm" ] && echo "gpu_user=$pid|$comm"; done; fi; ' +
+    'echo "users_known=$users_known"'
 
 function gpuStatusCommand() { return ["sh", "-c", gpuStatusScript] }
 
@@ -623,8 +636,8 @@ function parseGpuStatus(raw) {
 }
 
 function parseGpuInteger(value) {
-    var n = parseInt(String(value || "").trim())
-    return isNaN(n) ? -1 : n
+    var text = String(value === undefined || value === null ? "" : value).trim()
+    return /^-?\d+$/.test(text) ? Number(text) : -1
 }
 
 function displayOwnerLabel(driver) {
@@ -640,7 +653,7 @@ function dgpuStateLabel(status, dgpuDisabled) {
     if (!status.dgpuPresent) return "not detected"
     if (status.users.length > 0) return "busy — " + status.users.length + " visible process" + (status.users.length === 1 ? "" : "es")
     if (status.runtimeStatus === "suspended") return "runtime suspended"
-    if (status.runtimeStatus === "active") return "awake-idle"
+    if (status.runtimeStatus === "active") return status.usersKnown ? "awake — no visible processes" : "awake — process detection unavailable"
     return status.runtimeStatus || "state unknown"
 }
 

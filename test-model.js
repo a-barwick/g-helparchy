@@ -130,8 +130,8 @@ assert.deepEqual(M.parseHyprmoncfgStatus("command not found"), { managed: false,
 
 // ---------------------------------------------------------------- gpu mode
 // asus-linux's authoritative mapping is mux 0 = Ultimate and mux 1 =
-// Optimus/Hybrid. Integrated/Intel-only adds dgpu_disable=1 without moving
-// the MUX away from Intel.
+// Optimus/Hybrid. Integrated/Integrated adds dgpu_disable=1 without moving
+// the MUX away from the integrated GPU.
 assert.equal(M.gpuModeId(1, 0), "standard")
 assert.equal(M.gpuModeId(1, 1), "eco")
 assert.equal(M.gpuModeId(0, 0), "ultimate")
@@ -139,7 +139,7 @@ assert.equal(M.gpuModeDef("eco").mux, 1)
 assert.equal(M.gpuModeDef("standard").mux, 1)
 assert.equal(M.gpuModeDef("ultimate").mux, 0)
 
-// Hybrid <-> Intel-only changes only dgpu_disable. A MUX write is introduced
+// Hybrid <-> Integrated changes only dgpu_disable. A MUX write is introduced
 // only when entering or leaving dGPU-direct, and writes are serialized in the
 // same dgpu-then-mux order as upstream rog-control-center.
 assert.deepEqual(M.gpuModeCommands(1, 0, "eco", true, true), [
@@ -196,7 +196,8 @@ assert.equal(M.gpuDisableNeedsConfirmation("standard", 0, gs), false)
 assert.equal(M.gpuDisableNeedsConfirmation("eco", 1, gs), false)
 assert.equal(M.gpuDisableNeedsConfirmation("eco", 0, { usersKnown: false, users: [] }), true)
 assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "suspended" }, 0), "runtime suspended")
-assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active" }, 0), "awake-idle")
+assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active", usersKnown: true }, 0), "awake — no visible processes")
+assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active", usersKnown: false }, 0), "awake — process detection unavailable")
 assert.equal(M.dgpuStateLabel({ dgpuPresent: true, users: [], runtimeStatus: "active" }, 1), "disabled by firmware")
 
 // Opening the panel must not wake a suspended NVIDIA GPU.
@@ -230,4 +231,37 @@ assert.equal(M.serializeFanPoints(pts), "30c:1%,49c:2%,60c:40%")
 const moved = M.moveFanPoint(pts, 0, 200, -5)
 assert.deepEqual(moved[moved.length - 1], { temp: 100, speed: 0 })
 
+
+
+// Missing supported attributes must not look like a confirmed Hybrid mode.
+assert.equal(M.gpuModeId(-1, -1), "unknown")
+assert.equal(M.gpuModeId(1, -1, true, true), "unknown")
+assert.equal(M.gpuModeId(-1, 0, true, true), "unknown")
+assert.equal(M.gpuModeId(-1, 0, false, true), "standard")
+assert.equal(M.gpuModeId(1, -1, true, false), "standard")
+assert.equal(M.gpuModeId(-1, -1, false, false), "unknown")
+assert.equal(M.gpuModeDef("unknown").name, "Unknown")
+assert.deepEqual(M.gpuModeCommands(1, 0, "unknown", true, true), [])
+assert.equal(M.parseGpuInteger(0), 0)
+assert.equal(M.parseGpuInteger("1oops"), -1)
+assert.equal(M.parseGpuInteger(""), -1)
+
 console.log("ok - all Model.js checks passed")
+
+// Run the process-detection shell fragment with controlled fuser responses.
+// The rest of the hardware probe is excluded; no GPU device is opened.
+const { execFileSync } = require("child_process")
+const probe = M.gpuStatusScript.slice(M.gpuStatusScript.indexOf("users_known=0;"))
+function processProbe(definition, nodes = "/dev/mock-gpu") {
+    return M.parseGpuStatus(execFileSync("sh", ["-c", definition + "; gpu_nodes='" + nodes + "'; " + probe], { encoding: "utf8" }))
+}
+assert.equal(processProbe('fuser() { return 1; }').usersKnown, true)
+assert.equal(processProbe('fuser() { echo "Permission denied" >&2; return 1; }').usersKnown, false)
+assert.equal(processProbe('fuser() { return 2; }').usersKnown, false)
+assert.equal(processProbe('command() { return 1; }').usersKnown, false)
+assert.equal(processProbe('fuser() { return 0; }', "").usersKnown, false)
+const busy = processProbe('fuser() { echo $$; echo "/dev/mock-gpu:" >&2; return 0; }')
+assert.equal(busy.usersKnown, true)
+assert.equal(busy.users.length, 1)
+assert.equal(M.gpuDisableNeedsConfirmation("eco", 0, busy), true)
+console.log("ok - GPU process probe checks passed")

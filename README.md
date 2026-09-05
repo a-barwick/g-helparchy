@@ -30,7 +30,7 @@ that.
   The plugin never polls `nvidia-smi`, because polling it can wake a suspended
   dGPU. The same available readings appear in the bar icon's tooltip.
 - **Main** — performance mode (Quiet/Balanced/Performance, tinted by mode),
-  a Linux-aware GPU selector (Intel only/Hybrid/dGPU direct), actual display
+  a Linux-aware GPU selector (Integrated/Hybrid/dGPU direct), actual display
   ownership and dGPU runtime/process state, screen refresh rate and panel
   overdrive, battery charge limit.
 - **RGB** — keyboard lighting, filtered to the aura effects your laptop
@@ -69,20 +69,24 @@ not the apparent truthiness of the firmware value:
 
 | UI mode | `gpu_mux_mode` | `dgpu_disable` | Linux behavior after shutdown/reboot |
 |---|---:|---:|---|
-| Intel only | 1 | 1 | Intel owns the panel; NVIDIA is disabled |
-| Hybrid | 1 | 0 | Intel owns the panel; NVIDIA is available on demand |
-| dGPU direct | 0 | 0 | NVIDIA owns the internal panel |
+| Integrated | 1 | 1 | The integrated GPU owns the panel; the discrete GPU is disabled |
+| Hybrid | 1 | 0 | The integrated GPU owns the panel; the discrete GPU is available on demand |
+| dGPU direct | 0 | 0 | The discrete GPU owns the internal panel |
 
 `asusd` queues these GPU attributes in memory and `asus-shutdown` applies them
 during a normal shutdown. The UI therefore keeps three different facts
 separate: current firmware values, queued values, and observed Linux state. It
 finds the connected internal panel's DRM driver, reads the NVIDIA PCI runtime
 status, and uses `fuser` to list visible processes holding NVIDIA or NVIDIA DRM
-device nodes. It can report disabled, runtime suspended, awake-idle, or busy
+device nodes. It can report disabled, runtime suspended, awake, or busy
 without running `nvidia-smi`.
 
-Moving between Hybrid and Intel only changes `dgpu_disable`; the MUX is left at
-1. Selecting Intel only runs a fresh process check and refuses the first click
+Process detection is limited to what the current user can inspect. An empty
+list does not prove that no other user or system process is using the GPU.
+Missing tools, missing device nodes, and failed checks are shown as unavailable.
+
+Moving between Hybrid and Integrated changes `dgpu_disable`; the MUX is left at
+1. Selecting Integrated runs a fresh process check and refuses the first click
 when NVIDIA is busy (or process detection is unavailable). Close the listed
 programs and try again, or use the explicit **Disable anyway** confirmation.
 
@@ -93,8 +97,8 @@ queued until shutdown. There is deliberately no automatic "restore on next
 boot" action: these are persistent ASUS firmware attributes, so their effect
 can carry into Windows even though the plugin never changes Windows files.
 
-GPU selection does not touch monitor configuration or refresh rate. A panel
-running at 240 Hz remains at 240 Hz unless the separate Screen control is used.
+GPU selection does not touch monitor configuration or refresh rate. Use the
+separate Screen control to change the refresh rate.
 
 ### Screen refresh rate
 
@@ -194,6 +198,12 @@ busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/gpu_mux_mode xyz.l
 busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury CurrentValue
 busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury QueuedGpuValue
 ```
+
+## Tests
+
+Run `node test-model.js` and `node test-panel.js`. These cover the model,
+process-detection failure cases, and the panel write queue without changing
+firmware settings.
 
 ## License
 
