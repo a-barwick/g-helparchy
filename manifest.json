@@ -3,10 +3,10 @@
   "id": "io.github.a-barwick.g-helparchy",
   "name": "g-helparchy",
   "version": "2.1.0",
-  "author": "moneytosms, a-barwick",
+  "author": "a-barwick",
   "license": "MIT",
   "homepage": "https://github.com/a-barwick/g-helparchy",
-  "description": "Fork of moneytosms' ASUS panel. Power profiles, GPU modes, fan curves, RGB and charge limits, with GPU switching fixes and no nvidia-smi polling.",
+  "description": "ASUS power profiles, GPU modes, fan curves, RGB and charge limits, with corrected GPU switching and live GPU status.",
   "kinds": [
     "bar-widget"
   ],
