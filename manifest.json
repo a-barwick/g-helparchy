@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.moneytosms.asus",
+  "id": "io.github.a-barwick.asus",
   "name": "ASUS",
   "version": "2.1.0",
-  "author": "moneytosms",
+  "author": "a-barwick, moneytosms",
   "license": "MIT",
-  "homepage": "https://github.com/moneytosms/omarchy-asus",
-  "description": "ASUS laptop control with Linux GPU selection and power-state visibility, live sensors, performance modes, screen refresh, RGB, fan curves, and firmware limits",
+  "homepage": "https://github.com/a-barwick/omarchy-asus",
+  "description": "ASUS laptop controls for Omarchy: GPU modes, sensors, power profiles, keyboard lighting, and fan curves",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "ASUS",
-    "description": "Linux GPU selection and state, live sensors, performance modes, screen refresh, RGB, fan curves, and battery charge limits for ASUS laptops",
+    "description": "GPU modes, sensors, power profiles, keyboard lighting, fan curves, and battery charge limits for ASUS laptops",
     "category": "System",
     "aliases": ["asus", "rog", "tuf", "aura", "fan", "rgb", "lighting", "gpu", "temp", "ghelper"],
     "allowMultiple": false,

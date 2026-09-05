@@ -7,8 +7,8 @@ import "Model.js" as Model
 
 Panel {
     id: root
-    moduleName: "io.github.moneytosms.asus"
-    ipcTarget: "io.github.moneytosms.asus"
+    moduleName: "io.github.a-barwick.asus"
+    ipcTarget: "io.github.a-barwick.asus"
     manageIpc: false
 
     // Hosts like the Plugin Drawer set this to their own bar button so a
@@ -1055,7 +1055,7 @@ Panel {
         }
     }
 
-    IpcHandler { target: "io.github.moneytosms.asus"; function open() { root.open() } function close() { root.close() } function show() { root.open() } function hide() { root.close() } function toggle() { root.toggle() } function refresh() { root.refresh() } }
+    IpcHandler { target: "io.github.a-barwick.asus"; function open() { root.open() } function close() { root.close() } function show() { root.open() } function hide() { root.close() } function toggle() { root.toggle() } function refresh() { root.refresh() } }
     onOpenedChanged: { if (opened) { Qt.callLater(refresh); cursorActive = false } }
     Component.onCompleted: { checkAsusctl.running = true; checkHyprmoncfg.running = true }
 

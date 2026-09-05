@@ -1,10 +1,19 @@
 # omarchy-asus
 
-A tabbed ASUS laptop control panel for the [Omarchy](https://omarchy.org) bar,
-built on [`asusctl`](https://asus-linux.org/). Power profiles, keyboard RGB,
-editable fan curves, and firmware limits — organized like
-[G-Helper](https://github.com/seerge/g-helper), scoped to what your specific
-model actually supports.
+ASUS laptop controls for the [Omarchy](https://omarchy.org) bar, using
+[`asusctl`](https://asus-linux.org/). Includes power profiles, GPU modes,
+keyboard lighting, fan curves, and firmware power limits.
+
+Maintained by [a-barwick](https://github.com/a-barwick), based on
+[moneytosms/omarchy-asus](https://github.com/moneytosms/omarchy-asus).
+This fork fixes GPU mode selection, shows pending firmware changes, and
+avoids waking NVIDIA GPUs with sensor polling.
+
+Used on a ROG Zephyrus G16 (GU605CW). Other models and shutdown transitions
+need more testing. Bug reports should include the laptop model and asusctl
+version.
+
+The screenshots below are from upstream. The GPU section has since changed.
 
 | Main | RGB |
 |---|---|
@@ -14,15 +23,6 @@ model actually supports.
 |---|---|
 | ![Fan tab](docs/screenshots/fan.png) | ![Advanced tab](docs/screenshots/advanced.png) |
 
-## Why
-
-The stock single-scroll ASUS panel dumps every `asusctl` feature into one
-column regardless of whether your laptop supports it — wattage sliders with
-no context, keyboard RGB effects that silently no-op on unsupported hardware,
-a fan curve toggle for the master enable that never appears in the UI. This
-plugin detects what your specific model reports supporting and only shows
-that.
-
 ## Features
 
 - **Live sensors** — CPU temperature, both fan speeds, battery charge and charge
@@ -30,7 +30,7 @@ that.
   The plugin never polls `nvidia-smi`, because polling it can wake a suspended
   dGPU. The same available readings appear in the bar icon's tooltip.
 - **Main** — performance mode (Quiet/Balanced/Performance, tinted by mode),
-  a Linux-aware GPU selector (Integrated/Hybrid/dGPU direct), actual display
+  GPU mode (Integrated/Hybrid/dGPU direct), actual display
   ownership and dGPU runtime/process state, screen refresh rate and panel
   overdrive, battery charge limit.
 - **RGB** — keyboard lighting, filtered to the aura effects your laptop
@@ -61,7 +61,7 @@ feature set where Linux tooling allows it. What is deliberately absent:
 | Per-key / per-zone RGB | `asusctl` exposes zones only on some models; single-colour effects only for now |
 | Automatic AC/battery profile switching | `asusctl` applies its own AC/battery profiles; not duplicated here |
 
-### GPU selector and safety
+### GPU modes
 
 The selector follows the mappings in upstream
 [`asusctl` 6.3.8](https://gitlab.com/asus-linux/asusctl/-/blob/6.3.8/rog-platform/src/platform.rs),
@@ -129,8 +129,13 @@ Two details worth knowing:
 ## Development
 
 ```bash
-node test-model.js   # parser regression checks against real asusctl output
+node test-model.js
+node test-panel.js
+omarchy plugin validate .
 ```
+
+The tests cover parsing, GPU mode commands, process-detection failures, and
+the firmware write queue. They do not change firmware settings.
 
 ## Prerequisites
 
@@ -146,17 +151,25 @@ sudo systemctl enable --now asusd.service
 
 ## Install
 
+If the upstream plugin is enabled, disable it first:
+
 ```bash
-omarchy plugin add https://github.com/moneytosms/omarchy-asus.git --enable
+omarchy plugin disable io.github.moneytosms.asus
 ```
 
-Or clone manually into `~/.config/omarchy/plugins/io.github.moneytosms.asus`
+Install this fork:
+
+```bash
+omarchy plugin add https://github.com/a-barwick/omarchy-asus.git --enable
+```
+
+Or clone manually into `~/.config/omarchy/plugins/io.github.a-barwick.asus`
 and enable it via the Omarchy plugin menu.
 
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.moneytosms.asus
+omarchy plugin remove io.github.a-barwick.asus
 ```
 
 Removal deletes the plugin folder and its settings block in
@@ -174,16 +187,16 @@ Removal deletes the plugin folder and its settings block in
 
 ## Compatibility
 
-Works with any laptop `asusctl` supports (ROG, TUF, ProArt, Zenbook). Every
-section — RGB effects, fan curves, individual firmware attributes — is gated
-on what `asusctl` reports for your specific model; unsupported controls don't
-appear rather than sitting there doing nothing.
+Requires a laptop supported by `asusctl`. Controls depend on the features
+reported by the laptop. This fork has been used on the ROG Zephyrus G16
+(GU605CW); support for other models is not yet verified. GPU runtime and
+process detection currently cover NVIDIA devices.
 
 ## Troubleshooting
 
 ```bash
 # Verify the plugin is detected
-omarchy plugin validate ~/.config/omarchy/plugins/io.github.moneytosms.asus
+omarchy plugin validate ~/.config/omarchy/plugins/io.github.a-barwick.asus
 
 # Check asusd is running
 systemctl status asusd
@@ -198,12 +211,6 @@ busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/gpu_mux_mode xyz.l
 busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury CurrentValue
 busctl get-property xyz.ljones.Asusd /xyz/ljones/asus_armoury/dgpu_disable xyz.ljones.AsusArmoury QueuedGpuValue
 ```
-
-## Tests
-
-Run `node test-model.js` and `node test-panel.js`. These cover the model,
-process-detection failure cases, and the panel write queue without changing
-firmware settings.
 
 ## License
 
