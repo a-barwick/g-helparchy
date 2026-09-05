@@ -54,8 +54,15 @@ GPU mode changes apply after a shutdown or reboot.
 ```bash
 node test-model.js
 node test-panel.js
+node test-ui.js
 omarchy plugin validate .
 ```
+
+The UI smoke test requires Quickshell and Omarchy's shell components. It renders
+the tabs offscreen and checks the entry point in a hidden Wayland pass when a
+session is available. Hardware probes are disabled in the fixture.
+
+See [Architecture](docs/architecture.md) for module ownership and test locations.
 
 ## Credits and license
 
