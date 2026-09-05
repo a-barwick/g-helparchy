@@ -6,6 +6,7 @@ keyboard lighting, fan curves, and firmware power limits.
 
 Maintained by [a-barwick](https://github.com/a-barwick), based on
 [moneytosms/omarchy-asus](https://github.com/moneytosms/omarchy-asus).
+Thanks to moneytosms for building the original panel and sharing it.
 This fork fixes GPU mode selection, shows pending firmware changes, and
 avoids waking NVIDIA GPUs with sensor polling.
 
@@ -138,6 +139,11 @@ The tests cover parsing, GPU mode commands, process-detection failures, and
 the firmware write queue. They do not change firmware settings.
 
 ## Prerequisites
+
+Runs in the Omarchy Quattro shell. Requires `asusctl` and its `asusd` service.
+Screen controls use Hyprland's `hyprctl`; GPU status uses `busctl` from systemd.
+`fuser` from `psmisc` is optional and enables the GPU process list. If you use
+`hyprmoncfg`, screen changes are also saved to its active profile.
 
 ```bash
 # From AUR

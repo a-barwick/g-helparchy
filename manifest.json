@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "io.github.a-barwick.asus",
-  "name": "ASUS",
+  "name": "ASUS (a-barwick fork)",
   "version": "2.1.0",
-  "author": "a-barwick, moneytosms",
+  "author": "moneytosms, a-barwick",
   "license": "MIT",
   "homepage": "https://github.com/a-barwick/omarchy-asus",
-  "description": "ASUS laptop controls for Omarchy: GPU modes, sensors, power profiles, keyboard lighting, and fan curves",
+  "description": "Fork of moneytosms' ASUS panel. Power profiles, GPU modes, fan curves, RGB and charge limits, with GPU switching fixes and no nvidia-smi polling.",
   "kinds": [
     "bar-widget"
   ],
