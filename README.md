@@ -5,16 +5,15 @@ ASUS laptop controls for the [Omarchy](https://omarchy.org) bar, built on
 
 ## Install
 
-Requires Omarchy Quattro and a working asusctl/asusd setup. Disable any other
-ASUS control widget before enabling this one.
+Requires Omarchy Quattro and asusctl. Follow the
+[ASUS Linux Arch setup guide](https://asus-linux.org/guides/arch-guide/)
+first if asusctl is not already working.
+
+Disable any other ASUS control widget, then install:
 
 ```bash
 omarchy plugin add https://github.com/a-barwick/g-helparchy.git --enable
 ```
-
-The plugin uses Hyprland's `hyprctl` and systemd's `busctl`. Optional tools:
-`fuser` (`psmisc`) for the GPU process list, and `hyprmoncfg` for saving screen
-refresh changes to a monitor profile.
 
 | Main (Last Horizon) | RGB (Catppuccin Latte) |
 |---|---|
@@ -24,38 +23,29 @@ refresh changes to a monitor profile.
 |---|---|
 | ![Fan tab](docs/screenshots/fan.png) | ![Advanced tab](docs/screenshots/advanced.png) |
 
-## Standard features
+## G-Helper features
 
-- Quiet, Balanced, and Performance profiles
-- GPU mode selection
-- Screen refresh rate and panel overdrive
-- Keyboard RGB effects and brightness
-- Custom fan curves for each power profile
+- Performance profiles
+- GPU modes
+- Display refresh rate and panel overdrive
+- Keyboard lighting
+- Custom fan curves
 - Battery charge limits
 - CPU and GPU power limits
-- Temperatures, fan speeds, and battery readings
+- Live temperatures, fan speeds, and battery status
 
-Available controls depend on your laptop and what asusctl supports.
+Controls are shown based on what your laptop supports.
 
-## Enhanced in this fork
+## Enhanced for Omarchy
 
-- Corrected Integrated, Hybrid, and dGPU direct mode switching
-- Separate displays for the current GPU mode and changes queued for shutdown
-- A view of which GPU drives the screen, NVIDIA's power state, and apps using it
-- Confirmation before disabling a busy GPU, plus an option to replace a queued change
-- GPU monitoring without polling nvidia-smi and waking a sleeping GPU
-- Reliable power-limit defaults and support for more battery device names
+- GPU labels that match the actual ASUS modes
+- Current and queued GPU modes shown separately
+- Display GPU and dGPU status
+- Warnings when an app is using the dGPU
+- GPU checks that leave a sleeping dGPU asleep
+- Better power limit defaults and battery detection
 
-GPU changes take effect after a normal shutdown or reboot. Available GPU
-readings depend on the driver.
-
-## Remove
-
-```bash
-omarchy plugin remove io.github.a-barwick.g-helparchy
-```
-
-Removing the plugin leaves your firmware settings as they are.
+GPU mode changes apply after a shutdown or reboot.
 
 ## Development
 
@@ -68,4 +58,4 @@ omarchy plugin validate .
 ## Credits and license
 
 Based on [moneytosms' original ASUS panel](https://github.com/moneytosms/omarchy-asus).
-Thanks for building and sharing it. [MIT license](LICENSE).
+Released under the [MIT license](LICENSE).
