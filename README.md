@@ -3,11 +3,24 @@
 ASUS laptop controls for the [Omarchy](https://omarchy.org) bar, built on
 [asusctl](https://asus-linux.org/).
 
-| Main | RGB |
+## Install
+
+Requires Omarchy Quattro and a working asusctl/asusd setup. Disable any other
+ASUS control widget before enabling this one.
+
+```bash
+omarchy plugin add https://github.com/a-barwick/g-helparchy.git --enable
+```
+
+The plugin uses Hyprland's `hyprctl` and systemd's `busctl`. Optional tools:
+`fuser` (`psmisc`) for the GPU process list, and `hyprmoncfg` for saving screen
+refresh changes to a monitor profile.
+
+| Main (Last Horizon) | RGB (Catppuccin Latte) |
 |---|---|
 | ![Main tab](docs/screenshots/main.png) | ![RGB tab](docs/screenshots/rgb.png) |
 
-| Fan | Advanced |
+| Fan (Tokyo Night) | Advanced (Flexoki Light) |
 |---|---|
 | ![Fan tab](docs/screenshots/fan.png) | ![Advanced tab](docs/screenshots/advanced.png) |
 
@@ -35,19 +48,6 @@ Available controls depend on your laptop and what asusctl supports.
 
 GPU changes take effect after a normal shutdown or reboot. Available GPU
 readings depend on the driver.
-
-## Install
-
-Requires Omarchy Quattro and a working asusctl/asusd setup. Disable any other
-ASUS control widget before enabling this one.
-
-```bash
-omarchy plugin add https://github.com/a-barwick/g-helparchy.git --enable
-```
-
-The plugin uses Hyprland's `hyprctl` and systemd's `busctl`. Optional tools:
-`fuser` (`psmisc`) for the GPU process list, and `hyprmoncfg` for saving screen
-refresh changes to a monitor profile.
 
 ## Remove
 
