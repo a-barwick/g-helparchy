@@ -7,8 +7,8 @@ import "Model.js" as Model
 
 Panel {
     id: root
-    moduleName: "io.github.a-barwick.asus"
-    ipcTarget: "io.github.a-barwick.asus"
+    moduleName: "io.github.a-barwick.g-helparchy"
+    ipcTarget: "io.github.a-barwick.g-helparchy"
     manageIpc: false
 
     // Hosts like the Plugin Drawer set this to their own bar button so a
@@ -494,7 +494,7 @@ Panel {
         // Tooltip doubles as the at-a-glance sensor readout, so the common
         // "how hot is it right now" question needs no click at all.
         tooltipText: {
-            var t = "ASUS — " + Model.profileLabel(root.currentProfile)
+            var t = "g-helparchy — " + Model.profileLabel(root.currentProfile)
             if (root.sensors.cpuTemp >= 0) t += "\nCPU  " + Model.fmtTemp(root.sensors.cpuTemp) + "   " + Model.fmtRpm(root.sensors.fanCpu)
             if (root.sensors.gpuTemp >= 0) t += "\nGPU  " + Model.fmtTemp(root.sensors.gpuTemp) + "   " + Model.fmtRpm(root.sensors.fanGpu)
             return t
@@ -1055,7 +1055,7 @@ Panel {
         }
     }
 
-    IpcHandler { target: "io.github.a-barwick.asus"; function open() { root.open() } function close() { root.close() } function show() { root.open() } function hide() { root.close() } function toggle() { root.toggle() } function refresh() { root.refresh() } }
+    IpcHandler { target: "io.github.a-barwick.g-helparchy"; function open() { root.open() } function close() { root.close() } function show() { root.open() } function hide() { root.close() } function toggle() { root.toggle() } function refresh() { root.refresh() } }
     onOpenedChanged: { if (opened) { Qt.callLater(refresh); cursorActive = false } }
     Component.onCompleted: { checkAsusctl.running = true; checkHyprmoncfg.running = true }
 

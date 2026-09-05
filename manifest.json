@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.a-barwick.asus",
-  "name": "ASUS (a-barwick fork)",
+  "id": "io.github.a-barwick.g-helparchy",
+  "name": "g-helparchy",
   "version": "2.1.0",
   "author": "moneytosms, a-barwick",
   "license": "MIT",
-  "homepage": "https://github.com/a-barwick/omarchy-asus",
+  "homepage": "https://github.com/a-barwick/g-helparchy",
   "description": "Fork of moneytosms' ASUS panel. Power profiles, GPU modes, fan curves, RGB and charge limits, with GPU switching fixes and no nvidia-smi polling.",
   "kinds": [
     "bar-widget"
@@ -14,10 +14,10 @@
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "ASUS",
+    "displayName": "g-helparchy",
     "description": "GPU modes, sensors, power profiles, keyboard lighting, fan curves, and battery charge limits for ASUS laptops",
     "category": "System",
-    "aliases": ["asus", "rog", "tuf", "aura", "fan", "rgb", "lighting", "gpu", "temp", "ghelper"],
+    "aliases": ["asus", "rog", "tuf", "aura", "fan", "rgb", "lighting", "gpu", "temp", "ghelper", "g-helparchy"],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {

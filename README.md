@@ -1,4 +1,4 @@
-# omarchy-asus
+# g-helparchy
 
 ASUS laptop controls for the [Omarchy](https://omarchy.org) bar, using
 [`asusctl`](https://asus-linux.org/). Includes power profiles, GPU modes,
@@ -166,16 +166,16 @@ omarchy plugin disable io.github.moneytosms.asus
 Install this fork:
 
 ```bash
-omarchy plugin add https://github.com/a-barwick/omarchy-asus.git --enable
+omarchy plugin add https://github.com/a-barwick/g-helparchy.git --enable
 ```
 
-Or clone manually into `~/.config/omarchy/plugins/io.github.a-barwick.asus`
+Or clone manually into `~/.config/omarchy/plugins/io.github.a-barwick.g-helparchy`
 and enable it via the Omarchy plugin menu.
 
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.a-barwick.asus
+omarchy plugin remove io.github.a-barwick.g-helparchy
 ```
 
 Removal deletes the plugin folder and its settings block in
@@ -202,7 +202,7 @@ process detection currently cover NVIDIA devices.
 
 ```bash
 # Verify the plugin is detected
-omarchy plugin validate ~/.config/omarchy/plugins/io.github.a-barwick.asus
+omarchy plugin validate ~/.config/omarchy/plugins/io.github.a-barwick.g-helparchy
 
 # Check asusd is running
 systemctl status asusd
