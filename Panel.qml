@@ -201,8 +201,27 @@ Panel {
 
     // Live sensors — refreshed on a faster tick than the asusctl state, since
     // temps and fan speeds are the numbers you actually watch move.
-    property var sensors: ({ cpuTemp: -1, gpuTemp: -1, gpuPower: -1, gpuUtil: -1, fanCpu: -1, fanGpu: -1, batPct: -1, batStatus: "", batPower: -1 })
+    property var sensors: ({ cpuTemp: -1, cpuTotal: -1, cpuIdle: -1, gpuTemp: -1, gpuPower: -1, gpuUtil: -1, fanCpu: -1, fanGpu: -1, batPct: -1, batStatus: "", batPower: -1 })
+    property real previousCpuTotal: -1
+    property real previousCpuIdle: -1
+    property int cpuUtil: -1
     readonly property bool hasNvidia: sensors.gpuTemp >= 0
+
+    // Low-battery efficiency suggestion. The state machine is timestamp-based,
+    // so the faster sensor cadence while this panel is open cannot make the
+    // five-minute threshold arrive sooner.
+    property var efficiencyMonitorState: ({ lightSinceMs: 0, busySinceMs: 0, suggested: false, contextActive: false })
+    property bool efficiencySuppressed: false
+    property bool efficiencyActionRunning: false
+    property bool efficiencyProfilePending: false
+    property bool efficiencyDisplayPending: false
+    property bool efficiencyGpuPending: false
+    property bool efficiencyWaitingForGpu: false
+    property bool efficiencyGpuRequested: false
+    property var efficiencyErrors: []
+    property string efficiencyActionMessage: ""
+    readonly property bool efficiencySuggested: efficiencyMonitorState.suggested === true
+    readonly property bool efficiencyBannerVisible: efficiencySuggested || efficiencyActionMessage !== ""
 
     // Display — the built-in panel's current/available refresh rates, read
     // from Hyprland rather than asusctl (which has no display controls).
@@ -313,6 +332,7 @@ Panel {
     readonly property bool hasGpuMode: armourySupported.gpuMux || armourySupported.dgpuDisable
 
     readonly property bool showBatteryLimit: setting("showBatteryLimit", true) === true
+    readonly property bool suggestEfficiency: setting("suggestEfficiency", true) === true
     readonly property int refreshInterval: Math.max(5, Math.min(60, Number(setting("refreshIntervalSec", 10)) || 10)) * 1000
 
     function refresh() {
@@ -432,6 +452,10 @@ Panel {
         pendingGpuRequest = ""
         if (Model.gpuDisableNeedsConfirmation(id, effectiveDgpuDisable, gpuStatus)) {
             gpuConfirmMode = id
+            if (efficiencyWaitingForGpu) {
+                efficiencyActionRunning = false
+                efficiencyActionMessage = "Quiet and display savings applied. Review NVIDIA use below to finish switching."
+            }
             return
         }
         queueGpuMode(id)
@@ -440,6 +464,10 @@ Panel {
     function confirmGpuMode() {
         var id = gpuConfirmMode
         gpuConfirmMode = ""
+        if (id && efficiencyWaitingForGpu) {
+            efficiencyActionRunning = true
+            efficiencyActionMessage = "Finishing efficiency settings…"
+        }
         if (id) queueGpuMode(id)
     }
 
@@ -447,7 +475,13 @@ Panel {
         if (gpuActionProc.running || gpuActionQueue.length > 0 || armouryActionProc.running || armouryActionQueue.length > 0 || actionProc.running) return
         var commands = Model.gpuModeCommands(effectiveGpuMux, effectiveDgpuDisable, id,
                                              armourySupported.gpuMux, armourySupported.dgpuDisable)
-        if (commands.length === 0) return
+        if (commands.length === 0) {
+            if (efficiencyWaitingForGpu) {
+                addEfficiencyError("Integrated graphics could not be queued.")
+                finishEfficiencyAction(false)
+            }
+            return
+        }
         gpuActionTarget = id
         gpuActionQueue = commands
         runNextGpuAction()
@@ -460,6 +494,7 @@ Panel {
             runNextArmouryAction()
             if (!gpuStatusProc.running) gpuStatusProc.running = true
             if (!armouryProc.running) armouryProc.running = true
+            if (efficiencyWaitingForGpu) finishEfficiencyAction(true)
             return
         }
         var queue = gpuActionQueue.slice(0)
@@ -484,6 +519,113 @@ Panel {
         displayProc.running = true
     }
 
+    function updateEfficiencyMonitor(nextSensors, nextCpuUtil, nowMs) {
+        var state = Model.nextEfficiencyState(efficiencyMonitorState, {
+            enabled: suggestEfficiency,
+            suppressed: efficiencySuppressed,
+            batteryPct: nextSensors.batPct,
+            batteryStatus: nextSensors.batStatus,
+            cpuUtil: nextCpuUtil,
+            gpuUtil: nextSensors.gpuUtil,
+            gpuPower: nextSensors.gpuPower,
+            gpuMode: currentGpuMode,
+            profile: currentProfile,
+            refreshRate: monitor ? monitor.rate : -1,
+            customFanCurve: fanCurveEnabled
+        }, nowMs)
+        efficiencyMonitorState = state
+        if (!state.contextActive) {
+            efficiencySuppressed = false
+            if (!efficiencyActionRunning) efficiencyActionMessage = ""
+        }
+    }
+
+    function efficiencyQuietProfile() {
+        for (var i = 0; i < profiles.length; i++)
+            if (Model.profileLabel(profiles[i]) === "Quiet") return profiles[i]
+        return "Quiet"
+    }
+
+    function efficiencyRefreshRate() {
+        if (!monitor || !monitor.rates || monitor.rates.length === 0) return -1
+        for (var i = 0; i < monitor.rates.length; i++) if (Number(monitor.rates[i]) === 60) return 60
+        return Number(monitor.rates[0])
+    }
+
+    function addEfficiencyError(message) {
+        var next = efficiencyErrors.slice(0)
+        next.push(message)
+        efficiencyErrors = next
+    }
+
+    function switchToEfficiency() {
+        if (efficiencyActionRunning || actionProc.running || efficiencyProfileProc.running ||
+                displayProc.running || hyprmoncfgSaveProc.running || gpuActionProc.running ||
+                gpuActionQueue.length > 0 || pendingGpuRequest !== "" || armouryActionProc.running ||
+                armouryActionQueue.length > 0) return
+
+        efficiencyErrors = []
+        efficiencySuppressed = true
+        efficiencyActionRunning = true
+        efficiencyActionMessage = "Applying efficiency settings…"
+        efficiencyProfilePending = Model.profileLabel(currentProfile) !== "Quiet"
+
+        var targetRate = efficiencyRefreshRate()
+        efficiencyDisplayPending = targetRate > 0 && monitor && Number(monitor.rate) !== targetRate
+        if (monitor && targetRate > 60) addEfficiencyError("60 Hz is unavailable.")
+
+        efficiencyGpuPending = Model.gpuModeAvailable("eco", armourySupported.gpuMux, armourySupported.dgpuDisable) && gpuMode !== "eco"
+        efficiencyGpuRequested = efficiencyGpuPending || (currentGpuMode !== "eco" && gpuMode === "eco")
+        if (hasGpuMode && !Model.gpuModeAvailable("eco", armourySupported.gpuMux, armourySupported.dgpuDisable))
+            addEfficiencyError("Integrated-only mode is unavailable.")
+
+        if (efficiencyProfilePending) {
+            efficiencyProfileProc.command = ["asusctl", "profile", "set", efficiencyQuietProfile()]
+            efficiencyProfileProc.running = true
+        }
+        if (efficiencyDisplayPending) {
+            displayProc.command = Model.monitorCommand(monitor, targetRate)
+            displayProc.running = true
+        }
+        maybeContinueEfficiencyAction()
+    }
+
+    function maybeContinueEfficiencyAction() {
+        if (!efficiencyActionRunning || efficiencyProfilePending || efficiencyDisplayPending) return
+        if (efficiencyGpuPending) {
+            efficiencyGpuPending = false
+            efficiencyWaitingForGpu = true
+            requestGpuMode("eco")
+            return
+        }
+        finishEfficiencyAction(false)
+    }
+
+    function finishEfficiencyAction(gpuQueued) {
+        efficiencyActionRunning = false
+        efficiencyProfilePending = false
+        efficiencyDisplayPending = false
+        efficiencyGpuPending = false
+        efficiencyWaitingForGpu = false
+        efficiencyMonitorState = ({ lightSinceMs: 0, busySinceMs: 0, suggested: false, contextActive: true })
+        if (efficiencyErrors.length > 0) {
+            efficiencyActionMessage = "Efficiency partly applied. " + efficiencyErrors.join(" ")
+        } else if (gpuQueued || efficiencyGpuRequested) {
+            efficiencyActionMessage = "Efficiency applied. Integrated graphics will take effect after restart."
+        } else {
+            efficiencyActionMessage = "Efficiency applied."
+        }
+    }
+
+    function cancelGpuMode() {
+        gpuConfirmMode = ""
+        if (efficiencyWaitingForGpu) {
+            efficiencyWaitingForGpu = false
+            efficiencyActionRunning = false
+            efficiencyActionMessage = "Quiet and display savings applied. Integrated graphics was not queued."
+        }
+    }
+
     visible: asusctlAvailable
     implicitWidth: asusctlAvailable ? button.implicitWidth : 0
     implicitHeight: asusctlAvailable ? button.implicitHeight : 0
@@ -497,12 +639,24 @@ Panel {
             var t = "g-helparchy — " + Model.profileLabel(root.currentProfile)
             if (root.sensors.cpuTemp >= 0) t += "\nCPU  " + Model.fmtTemp(root.sensors.cpuTemp) + "   " + Model.fmtRpm(root.sensors.fanCpu)
             if (root.sensors.gpuTemp >= 0) t += "\nGPU  " + Model.fmtTemp(root.sensors.gpuTemp) + "   " + Model.fmtRpm(root.sensors.fanGpu)
+            if (root.efficiencySuggested) t += "\nHigh-power settings during light use"
             return t
         }
         onPressed: function(b) { root.toggle() }
         // Scroll cycles profiles without opening the panel — the fastest path
         // to Silent/Turbo, and what `cycleProfile` was written for.
         onWheelMoved: function(delta) { root.cycleProfile(delta > 0 ? 1 : -1) }
+    }
+
+    Rectangle {
+        visible: root.efficiencySuggested
+        width: Style.space(6); height: width; radius: width / 2
+        anchors.right: parent.right; anchors.top: parent.top
+        anchors.rightMargin: Style.space(2); anchors.topMargin: Style.space(2)
+        color: "#ffb347"
+        border.width: 1
+        border.color: Qt.rgba(0, 0, 0, 0.35)
+        z: 2
     }
 
     KeyboardPanel {
@@ -621,6 +775,52 @@ Panel {
                         }
                     }
 
+                    Rectangle {
+                        id: efficiencyBanner
+                        visible: root.efficiencyBannerVisible
+                        width: parent.width
+                        implicitHeight: efficiencyBannerColumn.implicitHeight + Style.space(12)
+                        radius: Style.cornerRadius
+                        color: Qt.rgba(1, 0.65, 0.2, 0.08)
+                        border.width: 1
+                        border.color: Qt.rgba(1, 0.65, 0.2, 0.28)
+
+                        Column {
+                            id: efficiencyBannerColumn
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            anchors.margins: Style.space(6)
+                            spacing: Style.space(5)
+                            Text {
+                                width: parent.width
+                                text: root.efficiencyActionMessage !== "" ? root.efficiencyActionMessage : "High-power settings during light use."
+                                wrapMode: Text.WordWrap
+                                color: "#ffb347"
+                                font.family: root.bar.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true
+                            }
+                            Text {
+                                visible: root.efficiencyActionMessage === ""
+                                width: parent.width
+                                text: "Quiet, 60 Hz, and Integrated graphics can stretch the remaining battery."
+                                wrapMode: Text.WordWrap
+                                color: Qt.darker(root.bar.foreground, 1.4)
+                                font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption
+                            }
+                            Button {
+                                visible: root.efficiencyActionMessage === ""
+                                width: parent.width
+                                enabled: !root.efficiencyActionRunning
+                                text: "Switch to Efficiency"
+                                tooltipText: "Apply Quiet and 60 Hz now, then safely queue Integrated graphics when supported."
+                                fontSize: Style.font.bodySmall
+                                foreground: root.bar.foreground; fontFamily: root.bar.fontFamily
+                                horizontalPadding: Style.spacing.controlPaddingX
+                                verticalPadding: Style.spacing.controlPaddingY
+                                bordered: true
+                                onClicked: root.switchToEfficiency()
+                            }
+                        }
+                    }
+
                     Column { width: parent.width; spacing: Style.space(8)
                         PanelSeparator { foreground: root.bar.foreground }
                         PanelSectionHeader { text: "PERFORMANCE MODE"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily }
@@ -713,7 +913,7 @@ Panel {
                                 Text { width: parent.width; text: "Disabling is only queued now, but these processes may block the firmware change at shutdown."; wrapMode: Text.WordWrap; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption }
                                 Row {
                                     width: parent.width; spacing: Style.space(4)
-                                    Button { width: (parent.width - Style.space(4)) / 2; text: "Cancel"; fontSize: Style.font.bodySmall; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; onClicked: root.gpuConfirmMode = "" }
+                                    Button { width: (parent.width - Style.space(4)) / 2; text: "Cancel"; fontSize: Style.font.bodySmall; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; onClicked: root.cancelGpuMode() }
                                     Button { width: (parent.width - Style.space(4)) / 2; text: "Disable anyway"; fontSize: Style.font.bodySmall; foreground: "#ff7770"; fontFamily: root.bar.fontFamily; horizontalPadding: Style.spacing.controlPaddingX; verticalPadding: Style.spacing.controlPaddingY; bordered: true; onClicked: root.confirmGpuMode() }
                                 }
                             }
@@ -1056,7 +1256,10 @@ Panel {
     }
 
     IpcHandler { target: "io.github.a-barwick.g-helparchy"; function open() { root.open() } function close() { root.close() } function show() { root.open() } function hide() { root.close() } function toggle() { root.toggle() } function refresh() { root.refresh() } }
-    onOpenedChanged: { if (opened) { Qt.callLater(refresh); cursorActive = false } }
+    onOpenedChanged: {
+        if (opened) { Qt.callLater(refresh); cursorActive = false }
+        else if (!efficiencyActionRunning && !efficiencyWaitingForGpu) efficiencyActionMessage = ""
+    }
     Component.onCompleted: { checkAsusctl.running = true; checkHyprmoncfg.running = true }
 
     Process { id: checkAsusctl; command: ["which", "asusctl"]; onExited: function(ec) { root.asusctlAvailable = ec === 0; if (root.asusctlAvailable) refresh() } }
@@ -1143,16 +1346,56 @@ Panel {
     Process {
         id: displayProc
         onExited: function(ec) {
+            if (ec !== 0 && root.efficiencyDisplayPending) {
+                root.addEfficiencyError("The display refresh rate could not be changed.")
+                root.efficiencyDisplayPending = false
+                root.maybeContinueEfficiencyAction()
+            }
             if (ec === 0 && root.hyprmoncfgManaged && root.hyprmoncfgProfile !== "" && !hyprmoncfgSaveProc.running) {
                 hyprmoncfgSaveProc.command = ["hyprmoncfg", "save", root.hyprmoncfgProfile]
                 hyprmoncfgSaveProc.running = true
                 return
             }
+            if (root.efficiencyDisplayPending) {
+                root.efficiencyDisplayPending = false
+                root.maybeContinueEfficiencyAction()
+            }
             if (!monitorProc.running) monitorProc.running = true
         }
     }
-    Process { id: hyprmoncfgSaveProc; onExited: function() { if (!monitorProc.running) monitorProc.running = true } }
-    Process { id: sensorProc; command: Model.sensorCommand(); stdout: StdioCollector { waitForEnd: true; onStreamFinished: { root.sensors = Model.parseSensors(text) } } }
+    Process { id: hyprmoncfgSaveProc; onExited: function(ec) {
+        if (root.efficiencyDisplayPending) {
+            if (ec !== 0) root.addEfficiencyError("The 60 Hz monitor profile could not be saved.")
+            root.efficiencyDisplayPending = false
+            root.maybeContinueEfficiencyAction()
+        }
+        if (!monitorProc.running) monitorProc.running = true
+    } }
+    Process {
+        id: sensorProc
+        command: Model.sensorCommand()
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: {
+                var next = Model.parseSensors(text)
+                var util = Model.cpuUtilization(root.previousCpuTotal, root.previousCpuIdle, next.cpuTotal, next.cpuIdle)
+                root.previousCpuTotal = next.cpuTotal
+                root.previousCpuIdle = next.cpuIdle
+                root.cpuUtil = util
+                root.sensors = next
+                root.updateEfficiencyMonitor(next, util, Date.now())
+            }
+        }
+    }
+    Process {
+        id: efficiencyProfileProc
+        onExited: function(ec) {
+            if (ec !== 0) root.addEfficiencyError("Quiet mode could not be applied.")
+            root.efficiencyProfilePending = false
+            if (!profileProc.running) profileProc.running = true
+            root.maybeContinueEfficiencyAction()
+        }
+    }
     Process {
         id: gpuActionProc
         onExited: function(ec) {
@@ -1160,6 +1403,10 @@ Panel {
                 root.gpuActionError = "Could not schedule the GPU change (asusctl exit " + ec + ")."
                 root.gpuActionQueue = []
                 root.gpuActionTarget = ""
+                if (root.efficiencyWaitingForGpu) {
+                    root.addEfficiencyError("Integrated graphics could not be queued.")
+                    root.finishEfficiencyAction(false)
+                }
                 root.runNextArmouryAction()
                 if (!gpuStatusProc.running) gpuStatusProc.running = true
                 return

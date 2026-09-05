@@ -64,6 +64,8 @@ assert.equal(M.parseArmouryValue("[0,1,2]"), null)
 
 // ---------------------------------------------------------------- sensors
 const SENSORS = `cpu_temp=63000
+cpu_total=10000
+cpu_idle=8000
 fan_cpu=3000
 fan_gpu=3100
 bat_pct=99
@@ -75,6 +77,8 @@ gpu_util=15
 `
 const s = M.parseSensors(SENSORS)
 assert.equal(s.cpuTemp, 63)      // millidegrees -> C
+assert.equal(s.cpuTotal, 10000)
+assert.equal(s.cpuIdle, 8000)
 assert.equal(s.fanCpu, 3000)
 assert.equal(s.gpuTemp, 51)
 assert.ok(Math.abs(s.gpuPower - 6.66) < 0.001)
@@ -88,6 +92,47 @@ assert.equal(empty.cpuTemp, -1)
 assert.equal(empty.gpuTemp, -1)
 assert.equal(M.fmtTemp(-1), "—")
 assert.equal(M.fmtRpm(0), "off")
+assert.equal(M.cpuUtilization(10000, 8000, 11000, 8750), 25)
+assert.equal(M.cpuUtilization(-1, -1, 11000, 8750), -1)
+assert.equal(M.cpuUtilization(undefined, undefined, 11000, 8750), -1)
+
+// ------------------------------------------------ efficiency suggestion
+assert.equal(M.isHighPowerConfiguration("ultimate", "Performance", 240, true), true)
+assert.equal(M.isHighPowerConfiguration("ultimate", "Quiet", 240, false), true)
+assert.equal(M.isHighPowerConfiguration("standard", "Performance", 240, true), true)
+assert.equal(M.isHighPowerConfiguration("standard", "Performance", 240, false), false)
+assert.equal(M.isHighPowerConfiguration("standard", "Quiet", 240, false), false)
+assert.equal(M.isLightWorkload(10, 5, 8), true)
+assert.equal(M.isLightWorkload(20, 5, 8), false)
+assert.equal(M.isLightWorkload(10, -1, -1), true)
+assert.equal(M.isLightWorkload(undefined, -1, -1), false)
+
+const efficiencyInput = {
+    enabled: true, suppressed: false, batteryPct: 25, batteryStatus: "Discharging",
+    cpuUtil: 10, gpuUtil: 5, gpuPower: 8, gpuMode: "ultimate",
+    profile: "Performance", refreshRate: 240, customFanCurve: true
+}
+let efficiency = M.nextEfficiencyState(null, efficiencyInput, 1000)
+assert.equal(efficiency.suggested, false)
+efficiency = M.nextEfficiencyState(efficiency, efficiencyInput, 300999)
+assert.equal(efficiency.suggested, false)
+efficiency = M.nextEfficiencyState(efficiency, efficiencyInput, 301000)
+assert.equal(efficiency.suggested, true)
+// A short spike neither clears the suggestion nor restarts its light timer.
+const busyInput = Object.assign({}, efficiencyInput, { cpuUtil: 80 })
+efficiency = M.nextEfficiencyState(efficiency, busyInput, 310000)
+assert.equal(efficiency.suggested, true)
+assert.equal(efficiency.lightSinceMs, 1000)
+// Thirty seconds of real work clears it.
+efficiency = M.nextEfficiencyState(efficiency, busyInput, 340000)
+assert.equal(efficiency.suggested, false)
+assert.equal(efficiency.lightSinceMs, 0)
+// Charging, a healthy battery, opt-out, or an efficiency action suppresses it.
+assert.equal(M.nextEfficiencyState(null, Object.assign({}, efficiencyInput, { batteryStatus: "Charging" }), 1000).contextActive, false)
+assert.equal(M.nextEfficiencyState(null, Object.assign({}, efficiencyInput, { batteryPct: 31 }), 1000).contextActive, false)
+assert.equal(M.nextEfficiencyState(null, Object.assign({}, efficiencyInput, { enabled: false }), 1000).contextActive, false)
+efficiency = M.nextEfficiencyState({ lightSinceMs: 1000, busySinceMs: 0, suggested: true }, Object.assign({}, efficiencyInput, { suppressed: true }), 400000)
+assert.equal(efficiency.suggested, false)
 
 // ---------------------------------------------------------------- display
 const MONITORS = JSON.stringify([

@@ -437,6 +437,9 @@ var presetColors = [
 // from sysfs, and only while the PCI device is already active. In particular,
 // this must never poll nvidia-smi: doing so can wake a runtime-suspended dGPU.
 var sensorScript =
+    'read _ cpu_user cpu_nice cpu_system cpu_idle cpu_iowait cpu_irq cpu_softirq cpu_steal _ < /proc/stat; ' +
+    'cpu_total=$((cpu_user + cpu_nice + cpu_system + cpu_idle + cpu_iowait + cpu_irq + cpu_softirq + cpu_steal)); ' +
+    'echo "cpu_total=$cpu_total"; echo "cpu_idle=$((cpu_idle + cpu_iowait))"; ' +
     'for h in /sys/class/hwmon/*; do n=$(cat "$h/name" 2>/dev/null); case "$n" in ' +
     'coretemp|k10temp|zenpower) echo "cpu_temp=$(cat "$h/temp1_input" 2>/dev/null)";; ' +
     'asus) echo "fan_cpu=$(cat "$h/fan1_input" 2>/dev/null)"; echo "fan_gpu=$(cat "$h/fan2_input" 2>/dev/null)";; ' +
@@ -459,7 +462,7 @@ function sensorCommand() { return ["sh", "-c", sensorScript] }
 // -1 means "not reported" throughout; callers hide the tile rather than
 // printing a bogus zero.
 function parseSensors(raw) {
-    var r = { cpuTemp: -1, gpuTemp: -1, gpuPower: -1, gpuUtil: -1, fanCpu: -1, fanGpu: -1, batPct: -1, batStatus: "", batPower: -1 }
+    var r = { cpuTemp: -1, cpuTotal: -1, cpuIdle: -1, gpuTemp: -1, gpuPower: -1, gpuUtil: -1, fanCpu: -1, fanGpu: -1, batPct: -1, batStatus: "", batPower: -1 }
     var lines = String(raw || "").split("\n")
     for (var i = 0; i < lines.length; i++) {
         var eq = lines[i].indexOf("=")
@@ -468,6 +471,8 @@ function parseSensors(raw) {
         if (v === "") continue
         var n = parseFloat(v)
         if (k === "cpu_temp" && !isNaN(n)) r.cpuTemp = Math.round(n / 1000)
+        else if (k === "cpu_total" && !isNaN(n)) r.cpuTotal = n
+        else if (k === "cpu_idle" && !isNaN(n)) r.cpuIdle = n
         else if (k === "gpu_temp_milli" && !isNaN(n)) r.gpuTemp = Math.round(n / 1000)
         else if (k === "gpu_power_uw" && !isNaN(n)) r.gpuPower = n / 1000000
         else if (k === "gpu_util" && !isNaN(n)) r.gpuUtil = Math.round(n)
@@ -478,6 +483,79 @@ function parseSensors(raw) {
         else if (k === "bat_status") r.batStatus = v
     }
     return r
+}
+
+// Aggregate CPU utilization between two /proc/stat snapshots. Reading the
+// counters is effectively free and includes the probe's own work, which gives
+// the efficiency detector a conservative (busier) result rather than a false
+// idle result.
+function cpuUtilization(previousTotal, previousIdle, currentTotal, currentIdle) {
+    var oldTotal = Number(previousTotal), oldIdle = Number(previousIdle)
+    var nextTotal = Number(currentTotal), nextIdle = Number(currentIdle)
+    var total = nextTotal - oldTotal
+    var idle = nextIdle - oldIdle
+    if (isNaN(oldTotal) || isNaN(oldIdle) || isNaN(nextTotal) || isNaN(nextIdle) ||
+            oldTotal < 0 || oldIdle < 0 || nextTotal < 0 || nextIdle < 0 || total <= 0 || idle < 0) return -1
+    return Math.round(clamp((total - idle) / total * 100, 0, 100))
+}
+
+// ============================================================
+// Context-aware efficiency suggestion
+// ============================================================
+function isDischarging(status) {
+    return String(status || "").toLowerCase() === "discharging"
+}
+
+function isPerformanceProfile(profile) {
+    var p = String(profile || "").toLowerCase()
+    return p.indexOf("performance") >= 0 || p.indexOf("turbo") >= 0
+}
+
+function isHighPowerConfiguration(gpuMode, profile, refreshRate, customFanCurve) {
+    var direct = gpuMode === "ultimate"
+    var performance = isPerformanceProfile(profile)
+    var highRefresh = Number(refreshRate) > 60
+    var customFans = customFanCurve === true
+    return (direct && (performance || highRefresh || customFans)) ||
+           (performance && highRefresh && customFans)
+}
+
+function isLightWorkload(cpuUtil, gpuUtil, gpuPower) {
+    var cpu = Number(cpuUtil), gpu = Number(gpuUtil), power = Number(gpuPower)
+    if (isNaN(cpu) || cpu < 0 || cpu >= 20) return false
+    if (!isNaN(gpu) && gpu >= 0 && gpu >= 15) return false
+    if (!isNaN(power) && power >= 0 && power >= 15) return false
+    return true
+}
+
+// Pure transition function so timing behaviour can be exercised without QML.
+// A short busy spike leaves lightSinceMs intact; thirty seconds of sustained
+// work clears the suggestion. All countdowns use timestamps, not sample counts,
+// so opening the panel and increasing the sensor rate cannot accelerate them.
+function nextEfficiencyState(previous, input, nowMs) {
+    var old = previous || {}
+    var now = Number(nowMs)
+    var contextActive = input.enabled === true && Number(input.batteryPct) >= 0 &&
+        Number(input.batteryPct) <= 30 && isDischarging(input.batteryStatus) &&
+        isHighPowerConfiguration(input.gpuMode, input.profile, input.refreshRate, input.customFanCurve)
+    if (!contextActive) return { lightSinceMs: 0, busySinceMs: 0, suggested: false, contextActive: false }
+
+    var lightSince = Number(old.lightSinceMs) || 0
+    var busySince = Number(old.busySinceMs) || 0
+    var suggested = old.suggested === true
+    if (isLightWorkload(input.cpuUtil, input.gpuUtil, input.gpuPower)) {
+        busySince = 0
+        if (lightSince <= 0) lightSince = now
+        if (input.suppressed !== true && now - lightSince >= 300000) suggested = true
+    } else {
+        if (busySince <= 0) busySince = now
+        if (now - busySince >= 30000) {
+            lightSince = 0
+            suggested = false
+        }
+    }
+    if (input.suppressed === true) suggested = false
+    return { lightSinceMs: lightSince, busySinceMs: busySince, suggested: suggested, contextActive: true }
 }
 
 // Cool -> hot ramp shared by every temperature readout.

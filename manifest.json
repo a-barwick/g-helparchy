@@ -22,6 +22,7 @@
     "defaultSection": "right",
     "defaults": {
       "showBatteryLimit": true,
+      "suggestEfficiency": true,
       "refreshIntervalSec": 10
     },
     "schema": [
@@ -29,6 +30,12 @@
         "key": "showBatteryLimit",
         "type": "boolean",
         "label": "Show battery charge limit",
+        "defaultValue": true
+      },
+      {
+        "key": "suggestEfficiency",
+        "type": "boolean",
+        "label": "Suggest Efficiency on low battery",
         "defaultValue": true
       },
       {

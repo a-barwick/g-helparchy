@@ -44,6 +44,8 @@ Controls are shown based on what your laptop supports.
 - Warnings when an app is using the dGPU
 - GPU checks that leave a sleeping dGPU asleep
 - Better power limit defaults and battery detection
+- A gentle low-battery suggestion with one-click Quiet, 60 Hz, and Integrated
+  graphics when high-power settings outlive the work that needed them
 
 GPU mode changes apply after a shutdown or reboot.
 
